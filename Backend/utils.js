@@ -52,7 +52,6 @@ export const sendOTPEmail = async (email, otp, name) => {
   }
 };
 
-export const currentOTPs = {}; // In-memory store for OTPs (email -> OTP)
 
 
 const accessTokenSecret = process.env.AccessTokenSecret;
