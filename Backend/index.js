@@ -5,43 +5,47 @@ import pool from "./db.js";
 import {
   generateOTP,
   sendOTPEmail,
-  currentOTPs,
   generateAccessToken,
   JWT_SECRET,
 } from "./utils.js";
 
 const app = express();
-app.use(cors({ origin: "*" }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
+// ✅ Middleware setup
+app.use(cors({ origin: "*" })); // Allow all origins (CORS policy)
+app.use(express.json()); // Parse JSON request bodies
+app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
+
+// ✅ Health check endpoint
 app.get("/", (req, res) => {
   res.status(200).send({ message: "Server is up and running" });
 });
 
-//LOGIN AND REGISTRATION ENDPOINTS
 
+// =========================
+// 🔐 LOGIN AND REGISTRATION
+// =========================
+
+// Login endpoint
 app.post("/login", async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    const userResult = await pool.query("SELECT * FROM Users WHERE Email = ?", [
-      email,
-    ]);
+    // Fetch user by email
+    const userResult = await pool.query("SELECT * FROM Users WHERE Email = ?", [email]);
 
-    // Check if user exists
     if (userResult[0].length === 0) {
       return res.status(404).json({ message: "User not found" });
     }
 
     const user = userResult[0][0];
+
+    // Compare provided password with stored hash
     const isPasswordValid = await bcrypt.compare(password, user.PasswordHash);
 
     if (isPasswordValid) {
-      const accessToken = generateAccessToken(user);
-      res
-        .status(200)
-        .json({ message: "Login Successful", isPasswordValid, accessToken });
+      const accessToken = generateAccessToken(user); // Generate JWT
+      res.status(200).json({ message: "Login Successful", isPasswordValid, accessToken });
     } else {
       res.status(401).json({ message: "Invalid Credentials", isPasswordValid });
     }
@@ -52,31 +56,31 @@ app.post("/login", async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
+
+// Registration endpoint
 app.post("/register", async (req, res) => {
   const { name, email, password } = req.body;
 
-  // Basic email validation regex
+  // Basic email format validation
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
   if (!emailRegex.test(email)) {
     return res.status(400).json({ message: "Invalid email format" });
   }
 
   try {
-    const existingUserResult = await pool.query(
-      "SELECT * FROM Users WHERE Email = ?",
-      [email],
-    );
-
+    // Check if email already exists
+    const existingUserResult = await pool.query("SELECT * FROM Users WHERE Email = ?", [email]);
     if (existingUserResult[0].length > 0) {
       return res.status(409).json({ message: "Email already in use" });
     }
 
+    // Hash password before storing
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    // Insert new user record
     const [newUser] = await pool.query(
       "INSERT INTO Users (Name, Email, PasswordHash) VALUES (?, ?, ?)",
-      [name, email, hashedPassword],
+      [name, email, hashedPassword]
     );
 
     console.log(newUser);
@@ -87,12 +91,17 @@ app.post("/register", async (req, res) => {
   }
 });
 
-// FORGOT PASSWORD ENDPOINTS
 
+// =========================
+// 🔑 FORGOT PASSWORD FLOW
+// =========================
+
+// Step 1: Request OTP
 app.post("/forgotpassword", async (req, res) => {
   const { email } = req.body;
 
   try {
+    // Verify user exists
     const [userResult] = await pool.query("SELECT * FROM Users WHERE Email = ?", [email]);
     if (userResult.length === 0) {
       return res.status(404).json({ message: "User not found" });
@@ -100,14 +109,18 @@ app.post("/forgotpassword", async (req, res) => {
 
     const user = userResult[0];
     const name = user.Name;
+
+    // Generate OTP and expiry
     const otp = generateOTP();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min expiry
 
+    // Store OTP in DB
     await pool.query(
       "INSERT INTO PasswordResetOTPs (Email, OTP, ExpiresAt) VALUES (?, ?, ?)",
       [email, otp, expiresAt]
     );
 
+    // Send OTP email
     const emailSent = await sendOTPEmail(email, otp, name);
     if (emailSent) {
       return res.status(200).json({ message: "OTP sent to email" });
@@ -120,19 +133,57 @@ app.post("/forgotpassword", async (req, res) => {
   }
 });
 
+// Step 2: Verify OTP
+app.post("/verifyotp", async (req, res) => {
+  const { email, OTP } = req.body;
+
+  try {
+    // Fetch latest OTP for this email
+    const [rows] = await pool.query(
+      "SELECT * FROM PasswordResetOTPs WHERE Email = ? ORDER BY ID DESC LIMIT 1",
+      [email]
+    );
+
+    if (rows.length === 0) {
+      return res.status(400).json({ message: "No OTP found" });
+    }
+
+    const { OTP: storedOtp, ExpiresAt } = rows[0];
+
+    // Check expiry
+    if (Date.now() > new Date(ExpiresAt)) {
+      return res.status(400).json({ message: "OTP expired" });
+    }
+
+    // Compare OTPs
+    if (storedOtp === OTP) {
+      return res.status(200).json({ message: "OTP verified successfully" });
+    } else {
+      return res.status(400).json({ message: "Invalid OTP" });
+    }
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Step 3: Update Password
 app.post("/updatepassword", async (req, res) => {
   const { email, newPassword } = req.body;
 
   try {
+    // Validate password strength
     if (!newPassword || newPassword.length < 6) {
       return res.status(400).json({ message: "Password must be at least 6 characters long" });
     }
 
+    // Verify user exists
     const [userResult] = await pool.query("SELECT * FROM Users WHERE Email = ?", [email]);
     if (userResult.length === 0) {
       return res.status(404).json({ message: "User not found" });
     }
 
+    // Hash and update password
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     await pool.query("UPDATE Users SET PasswordHash = ? WHERE Email = ?", [hashedPassword, email]);
 
@@ -146,45 +197,18 @@ app.post("/updatepassword", async (req, res) => {
   }
 });
 
-// verfication of OTP and updating new password can be implemented similarly with appropriate endpoints
 
-app.post("/verifyotp", async (req, res) => {
-  const { email, OTP } = req.body;
+// =========================
+// 🔒 RESTRICTED ENDPOINT
+// =========================
 
-  try {
-    const [rows] = await pool.query(
-      "SELECT * FROM PasswordResetOTPs WHERE Email = ? ORDER BY ID DESC LIMIT 1",
-      [email]
-    );
-
-    if (rows.length === 0) {
-      return res.status(400).json({ message: "No OTP found" });
-    }
-
-    const { OTP: storedOtp, ExpiresAt } = rows[0];
-
-    if (Date.now() > new Date(ExpiresAt)) {
-      return res.status(400).json({ message: "OTP expired" });
-    }
-
-    if (storedOtp === OTP) {
-      return res.status(200).json({ message: "OTP verified successfully" });
-    } else {
-      return res.status(400).json({ message: "Invalid OTP" });
-    }
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ message: "Server error" });
-  }
-});
-
-//Restricted Profile Endpoint
+// Example protected route using JWT middleware
 app.get("/resticted-data", JWT_SECRET, async (req, res) => {
   const { email } = req.body;
   try {
     const [userResult] = await pool.query(
       "SELECT Name, Email FROM Users WHERE Email = ?",
-      [email],
+      [email]
     );
     if (userResult.length === 0) {
       return res.status(404).json({ message: "User not found" });
@@ -197,6 +221,10 @@ app.get("/resticted-data", JWT_SECRET, async (req, res) => {
   }
 });
 
+
+// =========================
+// 🚀 SERVER STARTUP
+// =========================
 app.listen(3000, () => {
   console.log("Server is running on port 3000");
 });
