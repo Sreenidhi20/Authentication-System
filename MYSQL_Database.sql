@@ -14,23 +14,12 @@ CREATE TABLE Users
 SELECT * FROM Users;
 DELETE FROM USERS WHERE ID = 6;
 
-/*sreenidhibs04@gmail.com*/
-/*--hello1234*/
-
-/*
-seenubs73@gmail.com
-seenu123
-*/
 
 UPDATE Users
-SET Email = 'bsshobha77@gmail.com'
+SET Email = 'example@email.com'
 WHERE ID = 2;
 
 SELECT * FROM Users;
-/*
-shiva@gmail.com
-shiva123
-*/
 
 CREATE TABLE PasswordResetOTPs (
   ID INT AUTO_INCREMENT PRIMARY KEY,
